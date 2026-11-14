@@ -1,0 +1,104 @@
+diff --git a/app/src/io/freemytv/Recs.java b/app/src/io/freemytv/Recs.java
+index 1edfb1d..781d0cd 100644
+--- a/app/src/io/freemytv/Recs.java
++++ b/app/src/io/freemytv/Recs.java
+@@ -171,6 +171,8 @@ final class Recs {
+     }
+     /** Country for "what streams where" (config.properties "tmdb_region", e.g. US, GB, BR). */
+     static final String REGION = Place.region();
++    private static final String ORIGINAL_LANGUAGE = "te";
++    private static final String TITLE_LANGUAGE = "te-IN";
+     /** The errors the settings say in words: TMDB lists none of the TV's apps in REGION, or the TV has none we know. */
+     static final String NO_APPS = "none of the TV's streaming services are on TMDB";
+     static final String NO_KNOWN_APPS = "none of the TV's streaming apps can give picks";
+@@ -756,14 +758,14 @@ final class Recs {
+         }
+         StringBuilder ids = new StringBuilder();
+         for (int id : services.keySet()) ids.append(ids.length() == 0 ? "" : "|").append(id);
+-        String common = "&language=" + lang() + "&watch_region=" + REGION + "&with_watch_monetization_types=" + WATCH_TYPES + "&include_adult=false"
+-                + "&sort_by=popularity.desc&with_watch_providers=" + URLEncoder.encode(ids.toString(), "UTF-8")
++        String common = "&language=" + TITLE_LANGUAGE + "&watch_region=" + REGION + "&with_watch_monetization_types=" + WATCH_TYPES + "&include_adult=false"
++                + "&with_original_language=" + ORIGINAL_LANGUAGE + "&sort_by=popularity.desc&with_watch_providers=" + URLEncoder.encode(ids.toString(), "UTF-8")
+                 + (Prefs.hideAnimation() ? "&without_genres=" + ANIMATION : "");
+         // 1. Trending this week (TMDB goes by what people are watching and searching for right now), only what is
+         //    on one of the TV's services: the details say where (and are then ready).
+         List<Pick> hotMovies = new ArrayList<>(), hotShows = new ArrayList<>();
+         for (String kind : new String[] {"movie", "tv"}) {
+-            JSONArray hot = get("/trending/" + kind + "/week?language=" + lang()).getJSONArray("results");
++            JSONArray hot = get("/trending/" + kind + "/week?language=" + TITLE_LANGUAGE).getJSONArray("results");
+             List<Pick> candidates = new ArrayList<>();
+             for (int i = 0; i < hot.length() && i < 20; i++) add(candidates, hot.getJSONObject(i), kind);
+             for (Pick pick : candidates) {
+@@ -950,6 +952,7 @@ final class Recs {
+     }
+ 
+     private static void add(List<Pick> list, JSONObject o, String kind) {
++        if (!ORIGINAL_LANGUAGE.equals(o.optString("original_language"))) return;
+         String backdrop = o.optString("backdrop_path", "");
+         if (backdrop.isEmpty() || "null".equals(backdrop)) return;
+         if (Prefs.hideAnimation() && animated(o)) return;
+@@ -980,7 +983,10 @@ final class Recs {
+     /** Genre, runtime (or seasons) and the service it's on, among the ones the TV has. */
+     private void fetchDetails(Pick p) throws Exception {
+         JSONObject o = get("/" + p.kind + "/" + p.id
+-                + "?language=" + lang() + "&append_to_response=watch/providers,images" + (Config.OPEN_IN_STREMIO ? ",external_ids" : "") + "&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
++                + "?language=" + TITLE_LANGUAGE + "&append_to_response=watch/providers,images" + (Config.OPEN_IN_STREMIO ? ",external_ids" : "") + "&include_image_language=null," + Ui.language.replaceAll("-.*", "") + ",en");
++        if (!ORIGINAL_LANGUAGE.equals(o.optString("original_language"))) {
++            throw new IOException("Title is not a Telugu original");
++        }
+         p.title = title(p, o);
+         String poster = o.optString("poster_path", "");
+         if (!poster.isEmpty() && !"null".equals(poster)) p.poster = poster;
+@@ -1029,23 +1035,9 @@ final class Recs {
+         p.detailed = true;
+     }
+ 
+-    /**
+-     * Without a title in the TV's language TMDB answers with the original one, so a Korean series on a German TV reads
+-     * "닥터X: 하얀 마피아의 시대". Then the English title, when TMDB has one (one more request, only for those).
+-     */
+     private String title(Pick p, JSONObject o) {
+         String field = p.kind.equals("movie") ? "title" : "name";
+-        String own = o.optString(field, p.title);
+-        String original = o.optString("original_language");
+-        String lang = Ui.language.replaceAll("-.*", "");   // TMDB's original_language has no country: "zh", not "zh-CN"
+-        if (lang.equals("en") || own.isEmpty() || !own.equals(o.optString("original_" + field))
+-                || lang.equals(original) || "en".equals(original)) return own;
+-        try {
+-            String english = get("/" + p.kind + "/" + p.id + "?language=en-US").optString(field);
+-            return english.isEmpty() ? own : english;
+-        } catch (Exception e) {
+-            return own;
+-        }
++        return o.optString(field, o.optString("original_" + field, p.title));
+     }
+ 
+     /** TV genres that TMDB returns in English even in other languages (pt-BR, es, de…). */
+diff --git a/app/src/io/freemytv/Updates.java b/app/src/io/freemytv/Updates.java
+index cc388dc..532ea86 100644
+--- a/app/src/io/freemytv/Updates.java
++++ b/app/src/io/freemytv/Updates.java
+@@ -43,11 +43,11 @@ import java.security.MessageDigest;
+ final class Updates {
+     private Updates() {}
+ 
+-    private static final String LATEST = "https://api.github.com/repos/simbasjungles/free-my-tv/releases/latest";
++    private static final String LATEST = "https://api.github.com/repos/sainikhil001/free-my-tv-telugu/releases/latest";
+     // The only place the APK may come from: this repository's releases (github.com redirects to its download host).
+-    private static final String RELEASES = "https://github.com/simbasjungles/free-my-tv/releases/download/";
++    private static final String RELEASES = "https://github.com/sainikhil001/free-my-tv-telugu/releases/download/";
+     // The release key's certificate, as `apksigner verify --print-certs` shows it: only APKs signed with it come in.
+-    private static final String RELEASE_CERT = "b85d4ff69cb42bfb1837ee0279506363954470b16402a4165f2f095886d19204";
++    private static final String RELEASE_CERT = "23dc4696ff7f2d9bd11d01d6e723d3e627c61b780a63bb0ab82102f6779ff9e3";
+     private static final String ASSET = "FreeMyTV.apk";
+     private static final long MAX_SIZE = 30L << 20;   // the APK is about 1.5 MB
+     private static final long WEEK = 7 * 24 * 3600_000L;
+@@ -65,7 +65,7 @@ final class Updates {
+ 
+     /** The APK from the releases: built with --generic and signed with the project's key, so it can take the next. */
+     static boolean takesReleases(Context c) {
+-        if (!Config.GENERIC) return false;
++        // Custom releases use this feed and the pinned personal signing certificate.
+         if (releaseKey == null) {
+             boolean is;
+             try {

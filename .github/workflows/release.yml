@@ -1,0 +1,73 @@
+name: Build Telugu updates
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: write
+concurrency:
+  group: telugu-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/simbasjungles/free-my-tv/releases/latest --jq .tag_name)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-java@v4
+        if: steps.upstream.outputs.needed == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        if: steps.upstream.outputs.needed == 'true'
+      - name: Build and verify
+        if: steps.upstream.outputs.needed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "build-tools;34.0.0" "platforms;android-34"
+          git clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/simbasjungles/free-my-tv source
+          cd source
+          git apply --check ../telugu.patch
+          git apply ../telugu.patch
+          cp ../config.properties .
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > freemytv.keystore
+          chmod 600 freemytv.keystore
+          trap 'rm -f freemytv.keystore' EXIT
+          ./build.sh
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs FreeMyTV.apk > cert.txt
+          grep -q '23dc4696ff7f2d9bd11d01d6e723d3e627c61b780a63bb0ab82102f6779ff9e3' cert.txt
+          grep -q 'TMDB_REGION = "IN"' out/gen/io/freemytv/Config.java
+          grep -q 'with_original_language=' app/src/io/freemytv/Recs.java
+          grep -q 'ORIGINAL_LANGUAGE = "te"' app/src/io/freemytv/Recs.java
+          grep -q 'sainikhil001/free-my-tv-telugu/releases/latest' app/src/io/freemytv/Updates.java
+          git diff > ../source-changes.patch
+          git archive HEAD | gzip > ../upstream-source.tar.gz
+          cp FreeMyTV.apk ../FreeMyTV.apk
+          cd ..
+          sha256sum FreeMyTV.apk > SHA256SUMS
+      - name: Publish signed update
+        if: steps.upstream.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          gh release create "$UPSTREAM_TAG" FreeMyTV.apk SHA256SUMS source-changes.patch upstream-source.tar.gz --title "Free My TV $UPSTREAM_TAG — Telugu / India" --notes "India streaming catalogs, Telugu originals and Telugu title text where available. Personal signed update feed. Upstream: https://github.com/simbasjungles/free-my-tv/releases/tag/$UPSTREAM_TAG"
